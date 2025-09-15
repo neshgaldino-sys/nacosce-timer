@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OSCE 2–8–3 Timer</title>
+  <style>
+    :root { --bg:#0b1220; --card:#121a2b; --ink:#e8eefc; --muted:#9fb0d9; --accent:#6aa0ff; }
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { margin:0; background:linear-gradient(180deg, #0b1220, #0f1630); color:var(--ink); display:grid; place-items:center; min-height:100vh; }
+    .app { width:min(680px, 92vw); background:var(--card); padding:24px; border-radius:18px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    h1{ margin:0 0 12px; letter-spacing:.5px; font-weight:700; }
+    p{ margin:0 0 16px; color:var(--muted); }
+    .row{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .input { display:flex; align-items:center; gap:8px; background:#0b1324; padding:10px 12px; border:1px solid #1d2a48; border-radius:12px; }
+    .input input{ width:90px; background:transparent; border:none; color:var(--ink); font-size:16px; outline:none; }
+    button{ appearance:none; border:none; border-radius:12px; padding:11px 16px; font-weight:600; cursor:pointer; background:var(--accent); color:#041027; transition:.15s transform, .15s opacity; }
+    button:disabled{ opacity:.5; cursor:not-allowed; }
+    button:active{ transform: translateY(1px); }
+    .status{ display:grid; grid-template-columns: 1fr; gap:8px; margin-top:18px; background:#0b1324; border:1px solid #1d2a48; border-radius:14px; padding:14px; }
+    .grid{ display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center; }
+    .label{ color:var(--muted); font-size:14px; }
+    .clock{ font-size:56px; font-weight:800; letter-spacing:.5px; text-align:right; }
+    .pill{ display:inline-block; padding:6px 10px; border-radius:999px; background:#0f1a34; border:1px solid #1d2a48; color:var(--muted); font-size:13px; }
+    .footer{ margin-top:10px; font-size:12px; color:var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <h1>OSCE 2–8–3 Timer</h1>
+    <p>Enter the number of stations, then press <b>Play</b>. Each station runs <b>2</b> minutes → <b>8</b> minutes → <b>3</b> minutes with a short buzzer between phases.</p>
+
+    <div class="row" style="margin-top:12px">
+      <div class="input">
+        <span class="label">Stations</span>
+        <input id="stations" type="number" min="1" step="1" value="3" />
+      </div>
+      <button id="play">Play</button>
+      <button id="pause" disabled>Pause</button>
+      <button id="stop" disabled>Stop</button>
+      <span class="pill" id="loopInfo">Idle</span>
+    </div>
+
+    <div class="status">
+      <div class="grid">
+        <div>
+          <div class="label">Station</div>
+          <div id="round" style="font-weight:700">0 / 0</div>
+        </div>
+        <div class="clock" id="clock">00:00</div>
+      </div>
+      <div class="grid">
+        <div>
+          <div class="label">Phase</div>
+          <div id="phase" style="font-weight:700">—</div>
+        </div>
+        <div style="text-align:right">
+          <span class="pill" id="phaseLen">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">Tip: the first Play click unlocks audio in your browser if needed.</div>
+  </div>
+
+<script>
+(()=>{
+  'use strict';
+  const stationsEl = document.getElementById('stations');
+  const playBtn = document.getElementById('play');
+  const pauseBtn = document.getElementById('pause');
+  const stopBtn = document.getElementById('stop');
+  const round = document.getElementById('round');
+  const phase = document.getElementById('phase');
+  const clock = document.getElementById('clock');
+  const loopInfo = document.getElementById('loopInfo');
+  const phaseLen = document.getElementById('phaseLen');
+
+  // Use external buzzer sound file
+  function buzzer(){
+    const audio = new Audio('buzzer.wav');
+    audio.play().catch(()=>{});
+  }
+
+  function fmt(sec){
+    const m = Math.floor(sec/60); const s = sec % 60;
+    return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+
+  function countdown(ms, onTick){
+    return new Promise(resolve => {
+      let end = performance.now() + ms;
+      let localPausedAt = 0;
+      let frozen = null;
+      const iv = setInterval(() => {
+        if (abort) { clearInterval(iv); resolve('aborted'); return; }
+        // Handle pause/resume without losing remaining time
+        if (paused) {
+          if (!localPausedAt) localPausedAt = performance.now();
+          if (frozen === null) {
+            const leftNow = Math.max(0, end - performance.now());
+            frozen = Math.ceil(leftNow/1000);
+          }
+          onTick?.(frozen);
+          return;
+        } else if (localPausedAt) {
+          end += performance.now() - localPausedAt; // extend end by paused duration
+          localPausedAt = 0;
+          frozen = null;
+        }
+        const left = Math.max(0, end - performance.now());
+        onTick?.(Math.ceil(left/1000));
+        if (left <= 0) { clearInterval(iv); resolve(); }
+      }, 200);
+    });
+  }
+
+  let abort = false, running = false, paused = false;
+
+  stopBtn.addEventListener('click', () => {
+    abort = true;
+    paused = false;
+    loopInfo.textContent = 'Stopping…';
+    stopBtn.disabled = true;
+    pauseBtn.disabled = true;
+    pauseBtn.textContent = 'Pause';
+    playBtn.disabled = false;
+  });
+
+  pauseBtn.addEventListener('click', () => {
+    if (!running) return;
+    paused = !paused;
+    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+    loopInfo.textContent = paused ? 'Paused' : loopInfo.textContent.replace('Paused', '') || 'Running';
+  });
+
+  playBtn.addEventListener('click', async () => {
+    if (running) return;
+    const total = Math.max(1, Math.floor(+stationsEl.value || 1));
+    stationsEl.value = total;
+
+    running = true; abort = false; paused = false;
+    playBtn.disabled = true; stopBtn.disabled = false; pauseBtn.disabled = false; pauseBtn.textContent = 'Pause';
+    loopInfo.textContent = `Running ${total} station${total>1?'s':''}`;
+
+    const phases = [
+      { name: 'History', ms: 2*60*1000 },
+      { name: 'Exam/Tasks', ms: 8*60*1000 },
+      { name: 'Wrap‑up', ms: 3*60*1000 },
+    ];
+
+    for (let i=1; i<=total && !abort; i++){
+      round.textContent = `${i} / ${total}`;
+      for (const p of phases){
+        phase.textContent = p.name;
+        phaseLen.textContent = fmt(Math.floor(p.ms/1000));
+        buzzer();
+        const r = await countdown(p.ms, s => { clock.textContent = fmt(s); });
+        if (abort || r === 'aborted') break;
+      }
+      if (!abort) buzzer(); // station end
+    }
+
+    running = false;
+    playBtn.disabled = false; stopBtn.disabled = true; pauseBtn.disabled = true; pauseBtn.textContent = 'Pause';
+    loopInfo.textContent = abort ? 'Stopped' : 'Done';
+    phase.textContent = '—'; phaseLen.textContent = '—'; clock.textContent = '00:00';
+  });
+
+  // ---- Lightweight self-tests (optional): run with ?test=1 ----
+  (function runTestsIfRequested(){
+    const usp = new URLSearchParams(location.search);
+    if (usp.get('test') !== '1') return;
+    console.group('OSCE Timer tests');
+    console.assert(fmt(0) === '00:00', 'fmt 0');
+    console.assert(fmt(5) === '00:05', 'fmt 5');
+    console.assert(fmt(65) === '01:05', 'fmt 65');
+    const start1 = performance.now();
+    countdown(300).then(()=>{
+      const d1 = performance.now() - start1;
+      console.assert(d1 >= 250 && d1 <= 900, 'countdown ~300ms', d1);
+      // Pause test (best‑effort): pause for ~300ms and ensure overall lasts longer
+      const start2 = performance.now();
+      (async ()=>{
+        setTimeout(()=>{ paused = true; }, 100);
+        setTimeout(()=>{ paused = false; }, 450);
+        await countdown(300);
+        const d2 = performance.now() - start2;
+        console.assert(d2 >= 600, 'pause extends countdown');
+        console.groupEnd();
+      })();
+    });
+  })();
+
+})();
+</script>
+</body>
+</html>
